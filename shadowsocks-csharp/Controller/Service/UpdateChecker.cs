@@ -3,6 +3,11 @@ using System.Collections.Generic;
 using System.Net;
 using System.Text.RegularExpressions;
 
+/***********************************/
+using System.Windows.Forms;
+using System.IO.Compression;
+/***********************************/
+
 using Newtonsoft.Json.Linq;
 
 using Shadowsocks.Model;
@@ -10,10 +15,17 @@ using Shadowsocks.Util;
 
 namespace Shadowsocks.Controller
 {
+
+/*************************************************  This UpdateChecker is for shadowfog  ******************************************************/
+/**********************************  The update checker for shadowsocks is rewritten for lastest release  *************************************/
+/************************************************************ Oct. 20th ***********************************************************************/
+
     public class UpdateChecker
     {
-        private const string UpdateURL = "https://api.github.com/repos/shadowsocks/shadowsocks-windows/releases";
-        private const string UserAgent = "Mozilla/5.0 (Windows NT 5.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/35.0.3319.102 Safari/537.36";
+        //Use "releases/latest" instead of "releases";
+        //private const string UpdateURL = "https://api.github.com/repos/shadowsocks/shadowsocks-windows/releases/latest";
+        private const string UpdateURLShadowFog = "https://api.github.com/repos/ShadowFog/shadowfog-windows/releases/latest";
+        private const string UserAgent = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/53.0.2785.101 Safari/537.36";
 
         private Configuration config;
         public bool NewVersionFound;
@@ -24,6 +36,8 @@ namespace Shadowsocks.Controller
         public event EventHandler CheckUpdateCompleted;
 
         public const string Version = "3.3.1";
+        public const string ShadowFogVersion = "0.4.7";
+        public const string ShadowFogSubVersion = "2";
 
         private class CheckUpdateTimer : System.Timers.Timer
         {
@@ -56,13 +70,13 @@ namespace Shadowsocks.Controller
         public void CheckUpdate(Configuration config)
         {
             this.config = config;
-
             try
             {
                 Logging.Debug("Checking updates...");
                 WebClient http = CreateWebClient();
                 http.DownloadStringCompleted += http_DownloadStringCompleted;
-                http.DownloadStringAsync(new Uri(UpdateURL));
+                //http.DownloadStringAsync(new Uri(UpdateURL));
+                http.DownloadStringAsync(new Uri(UpdateURLShadowFog));
             }
             catch (Exception ex)
             {
@@ -70,38 +84,29 @@ namespace Shadowsocks.Controller
             }
         }
 
+        // modified from array processing to single Json obj;
         private void http_DownloadStringCompleted(object sender, DownloadStringCompletedEventArgs e)
         {
             try
             {
                 string response = e.Result;
+   
+                JObject release = JObject.Parse(response);
+                Asset asset = new Asset();
 
-                JArray result = JArray.Parse(response);
-
-                List<Asset> asserts = new List<Asset>();
-                if (result != null)
+                if (release != null)
                 {
-                    foreach (JObject release in result)
+                    if ((bool)release["prerelease"])
                     {
-                        if ((bool)release["prerelease"])
-                        {
-                            continue;
-                        }
-                        foreach (JObject asset in (JArray)release["assets"])
-                        {
-                            Asset ass = new Asset();
-                            ass.Parse(asset);
-                            if (ass.IsNewVersion(Version))
-                            {
-                                asserts.Add(ass);
-                            }
-                        }
+                        return;
+                    }
+                    foreach (JObject assetObj in (JArray)release["assets"]) //release["assets"] is a JSON array with only one object...
+                    {
+                        asset.Parse(assetObj);
                     }
                 }
-                if (asserts.Count != 0)
+                if (asset.IsNewVersion(ShadowFogVersion))
                 {
-                    SortByVersions(asserts);
-                    Asset asset = asserts[asserts.Count - 1];
                     NewVersionFound = true;
                     LatestVersionURL = asset.browser_download_url;
                     LatestVersionNumber = asset.version;
@@ -139,6 +144,9 @@ namespace Shadowsocks.Controller
             }
         }
 
+        /**************************************************************************************************************/
+        // this callback function add auto program replacing procedure, will be eliminated in the future mature versions
+        /**************************************************************************************************************/
         private void Http_DownloadFileCompleted(object sender, System.ComponentModel.AsyncCompletedEventArgs e)
         {
             try
@@ -153,6 +161,13 @@ namespace Shadowsocks.Controller
                 {
                     CheckUpdateCompleted(this, new EventArgs());
                 }
+                /**************************************************************************************************************/
+                // dirty auto updater put here...
+                string ShadowFogFullPath = Application.StartupPath + @"\ShadowFog.exe";
+                string ShadowFogOld = Application.StartupPath + @"\ShadowFog.exe.old";
+                System.IO.File.Move(ShadowFogFullPath, ShadowFogOld);
+                ZipFile.ExtractToDirectory(LatestVersionLocalName, Application.StartupPath);
+                /**************************************************************************************************************/
             }
             catch (Exception ex)
             {
@@ -164,13 +179,11 @@ namespace Shadowsocks.Controller
         {
             WebClient http = new WebClient();
             http.Headers.Add("User-Agent", UserAgent);
-            http.Proxy = new WebProxy(IPAddress.Loopback.ToString(), config.localPort);
+            /**************************************************************************************************************/
+            // The line below is not sure to enable;
+            //http.Proxy = new WebProxy(IPAddress.Loopback.ToString(), config.localPort);
+            /**************************************************************************************************************/
             return http;
-        }
-
-        private void SortByVersions(List<Asset> asserts)
-        {
-            asserts.Sort(new VersionComparer());
         }
 
         public class Asset
@@ -203,7 +216,7 @@ namespace Shadowsocks.Controller
 
             private static string ParseVersionFromURL(string url)
             {
-                Match match = Regex.Match(url, @".*Shadowsocks-win.*?-([\d\.]+)\.\w+", RegexOptions.IgnoreCase);
+                Match match = Regex.Match(url, @".*Shadowfog-win.*?-([\d\.]+)\.\w+", RegexOptions.IgnoreCase);
                 if (match.Success)
                 {
                     if (match.Groups.Count == 2)
