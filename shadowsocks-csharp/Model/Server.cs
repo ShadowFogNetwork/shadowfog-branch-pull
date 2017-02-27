@@ -59,6 +59,48 @@ namespace Shadowsocks.Model
                 : $"{remarks} ({serverStr})";
         }
 
+        /**********************************<Start> Add by Ian.May Oct. 23 ********************************************/
+        //Used for hide Partial FogNode Infomation
+        /**********************************<Start> Add by Ian.May Oct. 23 ********************************************/
+        public string FriendlyName(bool isShadowFogMode)
+        {
+            if (server.IsNullOrEmpty())
+            {
+                return I18N.GetString("New server");
+            }
+            string serverStr;
+            // CheckHostName() won't do a real DNS lookup
+            var hostType = Uri.CheckHostName(server);
+            if (hostType == UriHostNameType.Unknown)
+            {
+                throw new FormatException("Invalid Server Address.");
+            }
+            switch (hostType)
+            {
+                case UriHostNameType.IPv6:
+                    serverStr = $"[{server}]:{server_port}";
+                    break;
+                default:
+                    // IPv4 and domain name
+                    if(isShadowFogMode)
+                    {
+                        var serverFragments = server.Split('.');
+                        serverStr = $"*.{serverFragments[serverFragments.Length-1]}:{server_port}"; // for the 4th fragment
+                    }
+                    else
+                    {
+                        serverStr = $"{server}:{server_port}";
+                    }
+                    break;
+            }
+            return remarks.IsNullOrEmpty()
+                ? serverStr
+                : $"{remarks} ({serverStr})";
+        }
+        /********************************** <End> Add by Ian.May Oct. 23 ********************************************/
+        //End
+        /********************************** <End> Add by Ian.May Oct. 23 ********************************************/
+
         public Server()
         {
             server = "";

@@ -93,7 +93,7 @@ namespace Shadowsocks.View
 
             if (config.isDefault)
             {
-                _isFirstRun = true;
+                _isFirstRun = true; // can be adjusted for auto popping
                 ShowConfigForm();
             }
             else if(config.autoCheckUpdate)
@@ -176,14 +176,38 @@ namespace Shadowsocks.View
             }
             else
             {
-                serverInfo = config.GetCurrentServer().FriendlyName();
+                /*****************************************************************************/
+                //serverInfo = config.GetCurrentServer().FriendlyName();
+                serverInfo = config.GetCurrentServer().FriendlyName(controller.isShadowFogMode);
+                /*****************************************************************************/
             }
-            // we want to show more details but notify icon title is limited to 63 characters
-            string text = I18N.GetString("Shadowsocks") + " " + UpdateChecker.Version + "\n" +
-                          (enabled ?
-                              I18N.GetString("System Proxy On: ") + (global ? I18N.GetString("Global") : I18N.GetString("PAC")) :
-                              String.Format(I18N.GetString("Running: Port {0}"), config.localPort))  // this feedback is very important because they need to know Shadowsocks is running
-                          + "\n" + serverInfo;
+
+/******************************************************<Start> Edit by Ian.May, Oct.18**********************************************************************/
+/**************************************     We want to hide the FogNode infomation avoiding blocked by GFW     *********************************************/
+/******************************************************<Start> Edit by Ian.May, Oct.18**********************************************************************/
+
+            string text;
+            if (!controller.isShadowFogMode)
+            {
+                // we want to show more details but notify icon title is limited to 63 characters
+                text = I18N.GetString("Shadowsocks") + " " + UpdateChecker.Version + "\n" +
+                              (enabled ?
+                                  I18N.GetString("System Proxy On: ") + (global ? I18N.GetString("Global") : I18N.GetString("PAC")) :
+                                  String.Format(I18N.GetString("Running: Port {0}"), config.localPort))  // this feedback is very important because they need to know Shadowsocks is running
+                              + "\n" + serverInfo;
+            }
+            else
+            {
+                // this trayIcon update only execute when controller.config is changed, so it's not associated with the fogmodetoggle checkbox, but tha's ok;
+                text = I18N.GetString("ShadowFog") + " " + UpdateChecker.ShadowFogVersion + "\n" +
+                              (enabled ?
+                                  I18N.GetString("System Proxy On: ") + (global ? I18N.GetString("Global") : I18N.GetString("PAC")) :
+                                  String.Format(I18N.GetString("Running: Port {0}"), config.localPort))  // this feedback is very important because they need to know Shadowsocks is running
+                              + "\n" + serverInfo;
+            }
+
+/******************************************************<End> Edit by Ian.May, Oct.18*************************************************************************/
+
             _notifyIcon.Text = text.Substring(0, Math.Min(63, text.Length));
         }
 
@@ -271,7 +295,7 @@ namespace Shadowsocks.View
                     this.editGFWUserRuleItem = CreateMenuItem("Edit User Rule for GFWList...", new EventHandler(this.EditUserRuleFileForGFWListItem_Click)),
                     this.editOnlinePACItem = CreateMenuItem("Edit Online PAC URL...", new EventHandler(this.UpdateOnlinePACURLItem_Click)),
                 }),
-                this.proxyItem = CreateMenuItem("SOCKS5 Proxy...", new EventHandler(this.proxyItem_Click)),
+                this.proxyItem = CreateMenuItem("Forward Proxy...", new EventHandler(this.proxyItem_Click)),
                 new MenuItem("-"),
                 this.AutoStartupItem = CreateMenuItem("Start on Boot", new EventHandler(this.AutoStartupItem_Click)),
                 this.ShareOverLANItem = CreateMenuItem("Allow Clients from LAN", new EventHandler(this.ShareOverLANItem_Click)),
@@ -352,11 +376,13 @@ namespace Shadowsocks.View
         {
             if (updateChecker.NewVersionFound)
             {
-                ShowBalloonTip(String.Format(I18N.GetString("Shadowsocks {0} Update Found"), updateChecker.LatestVersionNumber), I18N.GetString("Click here to update"), ToolTipIcon.Info, 5000);
+                Console.Write("new version download complete!");
+                ShowBalloonTip(String.Format(I18N.GetString("ShadowFog {0} Update Found"), updateChecker.LatestVersionNumber), I18N.GetString("Click here to update"), ToolTipIcon.Info, 5000);
+                //ShowBalloonTip(String.Format(I18N.GetString("Shadowsocks {0} Update Found"), updateChecker.LatestVersionNumber), I18N.GetString("Click here to update"), ToolTipIcon.Info, 5000);
             }
             else if (!_isStartupChecking)
             {
-                ShowBalloonTip(I18N.GetString("Shadowsocks"), I18N.GetString("No update is available"), ToolTipIcon.Info, 5000);
+                ShowBalloonTip(I18N.GetString("ShadowFog"), I18N.GetString("No update is available"), ToolTipIcon.Info, 5000);
             }
             _isStartupChecking = false;
         }
@@ -423,7 +449,10 @@ namespace Shadowsocks.View
             Configuration configuration = controller.GetConfigurationCopy();
             foreach (var server in configuration.configs)
             {
-                MenuItem item = new MenuItem(server.FriendlyName());
+                /*****************************************************************************/
+                //MenuItem item = new MenuItem(server.FriendlyName());
+                MenuItem item = new MenuItem(server.FriendlyName(controller.isShadowFogMode));
+                /*****************************************************************************/
                 item.Tag = i - strategyCount;
                 item.Click += AServerItem_Click;
                 items.Add(i, item);
@@ -501,14 +530,20 @@ namespace Shadowsocks.View
 
         void logForm_FormClosed(object sender, FormClosedEventArgs e)
         {
+            logForm.Dispose();
             logForm = null;
             Utils.ReleaseMemory(true);
         }
 
         void configForm_FormClosed(object sender, FormClosedEventArgs e)
         {
-            configForm = null;
-            Utils.ReleaseMemory(true);
+            if (configForm != null)
+            {
+                configForm.Dispose();
+                configForm = null;
+                Utils.ReleaseMemory(true);
+            }
+
             if (_isFirstRun)
             {
                 CheckUpdateForFirstRun();
@@ -519,12 +554,14 @@ namespace Shadowsocks.View
 
         void proxyForm_FormClosed(object sender, FormClosedEventArgs e)
         {
+            proxyForm.Dispose();
             proxyForm = null;
             Utils.ReleaseMemory(true);
         }
 
         void hotkeySettingsForm_FormClosed(object sender, FormClosedEventArgs e)
         {
+            hotkeySettingsForm.Dispose();
             hotkeySettingsForm = null;
             Utils.ReleaseMemory(true);
         }
@@ -559,16 +596,13 @@ namespace Shadowsocks.View
 
         private void AboutItem_Click(object sender, EventArgs e)
         {
-            Process.Start("https://github.com/shadowsocks/shadowsocks-windows");
+            //Process.Start("https://github.com/shadowsocks/shadowsocks-windows");
+            Process.Start("https://github.com/ShadowFog/shadowfog-windows");
         }
 
         private void notifyIcon1_Click(object sender, MouseEventArgs e)
         {
-            if (e.Button == MouseButtons.Left)
-            {
-                // TODO: show something interesting
-            }
-            else if (e.Button == MouseButtons.Middle)
+            if ( e.Button == MouseButtons.Middle )
             {
                 ShowLogForm();
             }

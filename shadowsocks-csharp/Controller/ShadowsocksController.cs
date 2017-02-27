@@ -12,6 +12,8 @@ using Shadowsocks.Model;
 using Shadowsocks.Properties;
 using Shadowsocks.Util;
 
+using System.Windows.Forms;
+
 namespace Shadowsocks.Controller
 {
     public class ShadowsocksController
@@ -28,7 +30,7 @@ namespace Shadowsocks.Controller
         private PACServer _pacServer;
         private Configuration _config;
         private StrategyManager _strategyManager;
-        private PolipoRunner polipoRunner;
+        private PrivoxyRunner privoxyRunner;
         private GFWListUpdater gfwListUpdater;
         public AvailabilityStatistics availabilityStatistics = AvailabilityStatistics.Instance;
         public StatisticsStrategyConfiguration StatisticsConfiguration { get; private set; }
@@ -42,6 +44,18 @@ namespace Shadowsocks.Controller
         private bool stopped = false;
 
         private bool _systemProxyIsDirty = false;
+
+/*********************************************** <Start> add by Ian.May 2016/10/15 **************************************************/
+//_configBackup is ONLY for caching "_config.configs" (the servers), since we need _config when shadowfog is closing.We need to replace fognode server infomation
+/*********************************************** <Start> add by Ian.May 2016/10/15 **************************************************/
+        // writing to _configBackup should be extremely carefull, only BackUpSSconfig() can do this;
+        // _configBackup should never be saved directly, it only contains useful server backup infomation
+        private Configuration _configBackup; 
+        private ClientUser _clientUser;
+        public bool isShadowFogMode;
+        public bool isInitialStartup;
+        public bool isShadowFogStarted;// used for display" start/restart shadowfog"
+/************************************************ <End> add by Ian.May 2016/10/15 ***************************************************/
 
         public class PathEventArgs : EventArgs
         {
@@ -85,6 +99,18 @@ namespace Shadowsocks.Controller
 
         public ShadowsocksController()
         {
+/***************************************************<Start> add by Ian.May 2016/10/15****************************************************/
+// for destructing fogNodes at closing stage, should not be handed from _config;(shallow copy)
+/***************************************************<Start> add by Ian.May 2016/10/15****************************************************/
+            _configBackup = Configuration.Load();
+            _clientUser = ClientUser.Load();
+            isShadowFogMode = true;
+            isInitialStartup = true;
+            isShadowFogStarted = false; 
+
+            SystemProxy.Update(_configBackup, true);// forcedisable = true ,means force _config.enabled = false to update(close) system proxy;
+/****************************************************<End> add by Ian.May 2016/10/15*****************************************************/
+
             _config = Configuration.Load();
             StatisticsConfiguration = StatisticsStrategyConfiguration.Load();
             _strategyManager = new StrategyManager(this);
@@ -92,9 +118,60 @@ namespace Shadowsocks.Controller
             StartTrafficStatistics(61);
         }
 
+/***************************************************<Start> add by Ian.May 2016/11/02****************************************************/
+// for destructor cancelling system proxy
+/***************************************************<Start> add by Ian.May 2016/10/02****************************************************/
+        ~ShadowsocksController() //destructor
+        {
+           SystemProxy.Update(_config, true); // forcedisable = true ,means force _config.enabled = false to update(close) system proxy;
+        }
+/****************************************************<End> add by Ian.May 2016/10/15*****************************************************/
+
+
         public void Start()
         {
-            Reload();
+/***************************************************** <Start> add by Ian.May 2016/09/26 **********************************************/
+//use FogReload() to automatically selcect Fog Nodes at initial stage.
+/***************************************************** <Start> add by Ian.May 2016/09/26 **********************************************/
+            Configuration.Save(_config);
+            Console.WriteLine("Controller Starting..._config saved to file!");
+
+            if (isShadowFogMode)
+            {
+                // for initial start up, although isShadowFog Mode is checked,
+                // we don't want to call FogReload() without pressing the "Start ShadowFog" button;
+                if (isInitialStartup)
+                {
+                    Console.WriteLine("Initial Starting...");
+                    isInitialStartup = false;
+                    Reload();
+                }
+                else
+                {
+                    Console.WriteLine("FogMode Starting...");
+                    ToggleEnableWithoutReload(true); // start system proxy automatically
+
+                    bool global_temp = false; // for some SB starting shadowfog with global mode
+                    if(_config.global)
+                    {
+                        global_temp = _config.global;
+                        ToggleGlobal(false);
+                    }
+
+                    FogReload();
+
+                    if(global_temp)
+                    {
+                        ToggleGlobal(global_temp);
+                    }
+                }
+            }
+            else
+            {
+                Console.WriteLine("Normal Starting...");
+                /**********************************************************<End> add by Ian.May 2016/09/26***********************************************/
+                Reload();
+            }
         }
 
         protected void ReportError(Exception e)
@@ -158,6 +235,9 @@ namespace Shadowsocks.Controller
             _config.configs = servers;
             _config.localPort = localPort;
             Configuration.Save(_config);
+/**********************************<Start> Added by Ian.May Oct. 19***************************************************/
+            BackUpSSConfig();//Manully editing servers list will be recorded in configBackup.configs(_config.configs ==> _configBackup.configs)
+/**********************************<End> Added by Ian.May Oct. 19****************************************************/
         }
 
         public void SaveStrategyConfigurations(StatisticsStrategyConfiguration configuration)
@@ -187,12 +267,31 @@ namespace Shadowsocks.Controller
         {
             _config.enabled = enabled;
             UpdateSystemProxy();
-            SaveConfig(_config);
+            /************************<Edited by IM Nov.2th>*****************************/
+            // avoid sava fog nodes in the gui-config.json
+            _configBackup.enabled = enabled;
+            SaveConfig(_configBackup);
+            /***************************************************************************/
             if (EnableStatusChanged != null)
             {
                 EnableStatusChanged(this, new EventArgs());
             }
         }
+
+        /************************<Edited by IM Dec.20th>*****************************/
+        /********************* Potenitial bug fixes for disposed object *************/
+        public void ToggleEnableWithoutReload(bool enabled)
+        {
+            _config.enabled = enabled;
+            UpdateSystemProxy();
+            _configBackup.enabled = enabled;
+            Configuration.Save(_configBackup);
+            if (EnableStatusChanged != null)
+            {
+                EnableStatusChanged(this, new EventArgs());
+            }
+        }
+        /***************************************************************************/
 
         public void ToggleGlobal(bool global)
         {
@@ -221,9 +320,10 @@ namespace Shadowsocks.Controller
             SaveConfig(_config);
         }
 
-        public void EnableProxy(string proxy, int port)
+        public void EnableProxy(int type, string proxy, int port)
         {
             _config.proxy.useProxy = true;
+            _config.proxy.proxyType = type;
             _config.proxy.proxyServer = proxy;
             _config.proxy.proxyPort = port;
             SaveConfig(_config);
@@ -254,6 +354,12 @@ namespace Shadowsocks.Controller
 
         public void Stop()
         {
+/*****************************************************<Start> add by Ian.May 2016/10/15******************************************************/
+//_configBackup keeps the previous _config infomation ,and use _config for recieving fognode server infomation.
+//When exit(finish connection),we should erase the shadowfog server configs and put the orignial _config back
+            RecoverSSConfig(); //_configBackup.configs ==> _config.configs, then save _config;
+            Configuration.Save(_config); // correct opertation because this save extra configuration other than server infomation
+/******************************************************<End> add by Ian.May 2016/10/15*******************************************************/
             if (stopped)
             {
                 return;
@@ -263,13 +369,13 @@ namespace Shadowsocks.Controller
             {
                 _listener.Stop();
             }
-            if (polipoRunner != null)
+            if (privoxyRunner != null)
             {
-                polipoRunner.Stop();
+                privoxyRunner.Stop();
             }
             if (_config.enabled)
             {
-                SystemProxy.Update(_config, true);
+                SystemProxy.Update(_config, true); // forcedisable = true ,means force _config.enabled = false to update(close) system proxy;
             }
         }
 
@@ -416,9 +522,9 @@ namespace Shadowsocks.Controller
             _config = Configuration.Load();
             StatisticsConfiguration = StatisticsStrategyConfiguration.Load();
 
-            if (polipoRunner == null)
+            if (privoxyRunner == null)
             {
-                polipoRunner = new PolipoRunner();
+                privoxyRunner = new PrivoxyRunner();
             }
             if (_pacServer == null)
             {
@@ -440,11 +546,11 @@ namespace Shadowsocks.Controller
             {
                 _listener.Stop();
             }
-            // don't put polipoRunner.Start() before pacServer.Stop()
+            // don't put PrivoxyRunner.Start() before pacServer.Stop()
             // or bind will fail when switching bind address from 0.0.0.0 to 127.0.0.1
             // though UseShellExecute is set to true now
             // http://stackoverflow.com/questions/10235093/socket-doesnt-close-after-application-exits-if-a-launched-process-is-open
-            polipoRunner.Stop();
+            privoxyRunner.Stop();
             try
             {
                 var strategy = GetCurrentStrategy();
@@ -453,7 +559,7 @@ namespace Shadowsocks.Controller
                     strategy.ReloadServers();
                 }
 
-                polipoRunner.Start(_config);
+                privoxyRunner.Start(_config);
 
                 TCPRelay tcpRelay = new TCPRelay(this, _config);
                 UDPRelay udpRelay = new UDPRelay(this);
@@ -461,7 +567,7 @@ namespace Shadowsocks.Controller
                 services.Add(tcpRelay);
                 services.Add(udpRelay);
                 services.Add(_pacServer);
-                services.Add(new PortForwarder(polipoRunner.RunningPort));
+                services.Add(new PortForwarder(privoxyRunner.RunningPort));
                 _listener = new Listener(services);
                 _listener.Start(_config);
             }
@@ -489,6 +595,130 @@ namespace Shadowsocks.Controller
             UpdateSystemProxy();
             Utils.ReleaseMemory(true);
         }
+
+/***********************************************<Start> add by Ian.May 2016/09/26*********************************************************/
+        protected void FogReload() // FogReload process shouldn't change _configBackUp content
+        {
+            Console.WriteLine("FogMode Reloading......");
+            ConfigurationShadowFog _fogServerReply = new ConfigurationShadowFog();
+
+            string fogNodeList = ConfigurationShadowFog.GetFogNodeList(_clientUser, isShadowFogStarted);
+            // Bad http response such as 404 will directly jump to shadowsocks reload();
+            if (null != fogNodeList) 
+            {
+                // _fogServerReply is used to recieve all msgs including errors when http response is 200 OK
+                // handle bad scheduler reply
+                try
+                {
+                    // a better way is to use JObject or JArray, refer to UpdateChecker.cs
+                    _fogServerReply = JsonConvert.DeserializeObject<ConfigurationShadowFog>(fogNodeList);
+                    /******************************************************/
+                    Console.WriteLine("FogNode = " + _fogServerReply.configs[0].server);
+                    /******************************************************/
+                }
+                catch (Exception e)
+                {
+                    // not use msg box because of following error code will pop up again
+                    Console.WriteLine("FogNodeInfo Format: " + e.Message); 
+                }
+
+                if (Convert.ToBoolean(_fogServerReply.errorcode))
+                {
+                    MessageBox.Show(I18N.GetString("Error code : ") + _fogServerReply.errorcode + "\n\r" + I18N.GetString("Error msg : ") + _fogServerReply.errormsg);
+                    throw new Exception("Error");
+                }
+
+                Console.WriteLine("access_token=" + _fogServerReply.access_token);
+                Console.WriteLine("expires_in=" + _fogServerReply.expires_in);
+
+                // In case the scheduler reply with null, this is an bad entrance to make shadowsocks strategymode crashed;
+                if (null != _fogServerReply.configs)
+                {
+                    _config.configs = _fogServerReply.configs; //value pass proved;
+                    Configuration.Save(_config); //_config now is written into gui-config.json with FogNode IP and Ports for "Reload()" next...
+                    Console.WriteLine(I18N.GetString("Fog Node obtained. Please check connection!"));
+                }
+            } 
+               
+            Reload(); // Reload() first load the _config from local gui-config.json
+            // here should add oneline to save servers from _configBackup and the other settings from _config
+            // while NOT CHANGING _config itself
+            string _configString = JsonConvert.SerializeObject(_config, Formatting.Indented);
+            Configuration _configCache = JsonConvert.DeserializeObject<Configuration>(_configString);
+            _configCache.configs = _configBackup.configs;
+            Configuration.Save(_configCache);
+        }
+
+        public void RecordClientUser(string userName, string hashedPassword, bool isSave)
+        {
+            // if userName = "", we believe the user doesn't want to submit anything
+            if ("" != userName)
+            {
+                _clientUser.name = userName;
+                _clientUser.pswdHashed = hashedPassword;
+                _clientUser.isRemeberUser = isSave;
+            }
+            else
+            {
+                // must force username = "" because the file record the username last time
+                // and for next time load, the username won't display correctly with blank""; 
+                _clientUser.name = "";
+                _clientUser.pswdHashed = "";
+                _clientUser.isRemeberUser = isSave;
+            }
+
+            if (isSave)
+            {
+                ClientUser.Save(_clientUser);
+            }
+            else
+            {
+                // if user don't remember username and pswhashed, 
+                // we need a blank object to save with isRemember = false;
+                ClientUser _clientUserBlank = new ClientUser();
+                _clientUserBlank.isRemeberUser = isSave;
+                ClientUser.Save(_clientUserBlank);
+            }
+        }
+
+        public bool GetClientUserIsRemember()
+        {
+            return _clientUser.isRemeberUser;
+        }
+
+        public string GetClientUserName()
+        {
+            return _clientUser.name;
+        }
+
+        public string GetClientUserPasswordHashed()
+        {
+            return _clientUser.pswdHashed;
+        }
+
+        // pass _config.servers ==> _configBackup.servers, value pass only!
+        public void BackUpSSConfig()
+        {
+            if (null != _config)
+            {
+                _configBackup.configs = _config.configs;
+            }
+        }
+
+        // pass _configBackup.servers ==> _config.servers
+        public void RecoverSSConfig()
+        {
+            if (null != _configBackup)
+            {
+                _config.configs = _configBackup.configs;
+            }
+        }
+        // WARNING: this is only used for servers display on ConfigForm Panel
+        public Configuration GetBackUpConfiguration()
+        {
+            return _configBackup;
+        }
+/******************************************************<End> add by Ian.May 2016/09/26**********************************************************/
 
         protected void SaveConfig(Configuration newConfig)
         {
